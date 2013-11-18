@@ -28,19 +28,17 @@ import android.content.res.Resources;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.IBinder;
+import android.provider.Calendar;
 import android.provider.Calendar.Attendees;
 import android.provider.Calendar.Calendars;
 import android.provider.Calendar.Instances;
-import android.text.TextUtils;
 import android.text.format.DateFormat;
 import android.text.format.DateUtils;
 import android.text.format.Time;
-import android.util.CalendarUtils.TimeZoneUtils;
 import android.util.Log;
 import android.view.View;
 import android.widget.RemoteViews;
 
-import java.util.Locale;
 import java.util.Set;
 import java.util.TimeZone;
 
@@ -82,16 +80,10 @@ public class CalendarAppWidgetService extends Service implements Runnable {
     static final String ACTION_PACKAGE = "com.google.android.calendar";
     static final String ACTION_CLASS = "com.android.calendar.LaunchActivity";
     static final String KEY_DETAIL_VIEW = "DETAIL_VIEW";
-    static final String CALENDAR_PREFS_NAME = "com.android.calendar_preferences";
-    static TimeZoneUtils mTZUtils = new TimeZoneUtils(CALENDAR_PREFS_NAME);
-
-    TimeZone mTimeZone;
 
     @Override
     public void onStart(Intent intent, int startId) {
         super.onStart(intent, startId);
-
-        mTZUtils.forceDBRequery(getApplicationContext(), this);
 
         // Only start processing thread if not already running
         synchronized (AppWidgetShared.sLock) {
@@ -112,9 +104,6 @@ public class CalendarAppWidgetService extends Service implements Runnable {
      * Thread loop to handle
      */
     public void run() {
-        mTimeZone = TimeZone.getTimeZone(
-            mTZUtils.getTimeZone(getApplicationContext(), this));
-
         while (true) {
             long now = -1;
             int[] appWidgetIds;
@@ -253,7 +242,7 @@ public class CalendarAppWidgetService extends Service implements Runnable {
         }
         recycle.timezone = Time.TIMEZONE_UTC;
         recycle.set(utcTime);
-        recycle.timezone = mTimeZone.getID();
+        recycle.timezone = TimeZone.getDefault().getID();
         return recycle.normalize(true);
     }
 
@@ -274,7 +263,6 @@ public class CalendarAppWidgetService extends Service implements Runnable {
 
             // Adjust all-day times into local timezone
             if (allDay) {
-                // Don't care about tz since convert sets it explicitly
                 final Time recycle = new Time();
                 start = convertUtcToLocal(recycle, start);
                 end = convertUtcToLocal(recycle, end);
@@ -290,7 +278,7 @@ public class CalendarAppWidgetService extends Service implements Runnable {
     }
 
     private long getNextMidnightTimeMillis() {
-        Time time = new Time(mTimeZone.getID());
+        Time time = new Time();
         time.setToNow();
         time.monthDay++;
         time.hour = 0;
@@ -357,7 +345,7 @@ public class CalendarAppWidgetService extends Service implements Runnable {
         RemoteViews views = new RemoteViews(context.getPackageName(), R.layout.agenda_appwidget);
         setNoEventsVisible(views, false);
 
-        Time time = new Time(mTimeZone.getID());
+        Time time = new Time();
         time.setToNow();
         int yearDay = time.yearDay;
         int dateNumber = time.monthDay;
@@ -401,15 +389,7 @@ public class CalendarAppWidgetService extends Service implements Runnable {
         if (DateFormat.is24HourFormat(context)) {
             flags |= DateUtils.FORMAT_24HOUR;
         }
-        whenString = mTZUtils.formatDateRange(context, start, start, flags);
-        String tz = mTimeZone.getID();
-        if (!TextUtils.equals(tz,Time.getCurrentTimezone())) {
-            StringBuilder title = new StringBuilder(whenString);
-            boolean isDST = time.isDst != 0;
-            title.append(" (").append(mTimeZone.getDisplayName(isDST, TimeZone.SHORT,
-                    Locale.getDefault())).append(")");
-            whenString = title.toString();
-        }
+        whenString = DateUtils.formatDateRange(context, start, start, flags);
         views.setTextViewText(R.id.when, whenString);
 
         // Clicking on the widget launches Calendar

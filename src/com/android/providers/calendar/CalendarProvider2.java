@@ -3141,7 +3141,6 @@ public class CalendarProvider2 extends SQLiteContentProvider implements OnAccoun
                             }
                         }
                     }
-                    triggerAppWidgetUpdate(-1);
                 }
                 return result;
             }
