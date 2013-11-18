@@ -408,12 +408,10 @@ public class CalendarAppWidgetService extends Service implements Runnable {
 
         int flags;
         String whenString;
-        String tz;
         if (allDay) {
-            tz = Time.TIMEZONE_UTC;
-            flags = DateUtils.FORMAT_ABBREV_ALL | DateUtils.FORMAT_SHOW_DATE;
+            flags = DateUtils.FORMAT_ABBREV_ALL | DateUtils.FORMAT_UTC
+                    | DateUtils.FORMAT_SHOW_DATE;
         } else {
-            tz = mTimeZone.getID();
             flags = DateUtils.FORMAT_ABBREV_ALL | DateUtils.FORMAT_SHOW_TIME;
 
             // Show date if different from today
@@ -425,10 +423,11 @@ public class CalendarAppWidgetService extends Service implements Runnable {
         if (DateFormat.is24HourFormat(context)) {
             flags |= DateUtils.FORMAT_24HOUR;
         }
+        String tz = mTimeZone.getID();
         mSB.setLength(0);
         whenString = DateUtils.formatDateRange(context, mF, start, start, flags, tz).toString();
 
-        if (!allDay && !TextUtils.equals(tz,Time.getCurrentTimezone())) {
+        if (!TextUtils.equals(tz,Time.getCurrentTimezone())) {
             StringBuilder title = new StringBuilder(whenString);
             boolean isDST = time.isDst != 0;
             title.append(" (").append(mTimeZone.getDisplayName(isDST, TimeZone.SHORT,
