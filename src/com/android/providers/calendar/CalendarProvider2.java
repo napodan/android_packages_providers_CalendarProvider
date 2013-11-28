@@ -1288,7 +1288,6 @@ public class CalendarProvider2 extends SQLiteContentProvider implements OnAccoun
                         }
                         continue;
                     }
-
                     if (deleted) {
                         if (Log.isLoggable(TAG, Log.DEBUG)) {
                             Log.d(TAG, "Found deleted recurring event in "
@@ -2654,7 +2653,13 @@ public class CalendarProvider2 extends SQLiteContentProvider implements OnAccoun
             if (cursor.moveToNext()) {
                 result = 1;
                 String syncId = cursor.getString(EVENTS_SYNC_ID_INDEX);
+                String rRule = cursor.getString(EVENTS_RRULE_INDEX);
+                boolean emptyRRule = TextUtils.isEmpty(rRule);
                 boolean emptySyncId = TextUtils.isEmpty(syncId);
+                if (!emptySyncId && !emptyRRule) {
+                    // Delete exceptions to this event as well.
+                    mDb.delete("Events", "originalEvent=?", new String[] {syncId});
+                }
 
                 // If this was a recurring event or a recurrence
                 // exception, then force a recalculation of the
