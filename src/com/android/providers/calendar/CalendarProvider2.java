@@ -1804,6 +1804,7 @@ public class CalendarProvider2 extends SQLiteContentProvider implements OnAccoun
                     mDbHelper.scheduleSync(account, false /* two-way sync */, calendarUrl);
                 }
                 id = mDbHelper.calendarsInsert(values);
+                triggerAppWidgetUpdate(id);
                 break;
             case ATTENDEES:
                 if (!values.containsKey(Attendees.EVENT_ID)) {
@@ -2882,10 +2883,9 @@ public class CalendarProvider2 extends SQLiteContentProvider implements OnAccoun
                 int result = mDb.update("Calendars", values, "_id=?",
                         new String[] {String.valueOf(id)});
 
-                // The calendar should not be displayed in widget either.
-                final Integer selected = values.getAsInteger(Calendars.SELECTED);
-                if (selected != null && selected == 0) {
-                    triggerAppWidgetUpdate(-1);
+                if (result > 0) {
+                    // update the widget
+                    triggerAppWidgetUpdate(-1 /* changedEventId */);
                 }
 
                 return result;
@@ -2979,14 +2979,16 @@ public class CalendarProvider2 extends SQLiteContentProvider implements OnAccoun
                                 Log.d(TAG, "updateInternal() changing event");
                             }
                             scheduleNextAlarm(false /* do not remove alarms */);
-                            triggerAppWidgetUpdate(id);
                         }
+
+                        triggerAppWidgetUpdate(id);
                     }
                 } else {
                     result = deleteEventInternal(id, callerIsSyncAdapter, true /* isBatch */);
                     scheduleNextAlarm(false /* do not remove alarms */);
                     triggerAppWidgetUpdate(id);
                 }
+
                 return result;
             }
             case ATTENDEES_ID: {
@@ -3844,6 +3846,9 @@ public class CalendarProvider2 extends SQLiteContentProvider implements OnAccoun
         } finally {
             mDb.endTransaction();
         }
+
+        // make sure the widget reflects the account changes
+        triggerAppWidgetUpdate(-1 /* changedEventId */);
     }
 
     /* package */ static boolean readBooleanQueryParameter(Uri uri, String name,
