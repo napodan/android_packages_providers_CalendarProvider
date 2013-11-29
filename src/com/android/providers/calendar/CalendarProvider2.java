@@ -162,15 +162,15 @@ public class CalendarProvider2 extends SQLiteContentProvider implements OnAccoun
         "CalendarSyncAdapter#originalTimezone";
 
     private static final String SQL_SELECT_EVENTSRAWTIMES = "SELECT " +
-            EventsRawTimesColumns.EVENT_ID + ", " +
-            EventsRawTimesColumns.DTSTART_2445 + ", " +
-            EventsRawTimesColumns.DTEND_2445 + ", " +
+            Calendar.EventsRawTimesColumns.EVENT_ID + ", " +
+            Calendar.EventsRawTimesColumns.DTSTART_2445 + ", " +
+            Calendar.EventsRawTimesColumns.DTEND_2445 + ", " +
             Events.EVENT_TIMEZONE +
             " FROM " +
             "EventsRawTimes" + ", " +
             "Events" +
             " WHERE " +
-            EventsRawTimesColumns.EVENT_ID + " = " + "Events." + Events._ID;
+            Calendar.EventsRawTimesColumns.EVENT_ID + " = " + "Events." + Events._ID;
 
     private static final String SQL_SELECT_COUNT_FOR_SYNC_ID =
             "SELECT COUNT(*) FROM " + Tables.EVENTS + " WHERE " + Events._SYNC_ID + "=?";
@@ -350,43 +350,6 @@ public class CalendarProvider2 extends SQLiteContentProvider implements OnAccoun
             }
         }
     };
-
-    /**
-     * Columns from the EventsRawTimes table
-     */
-    public interface EventsRawTimesColumns
-    {
-        /**
-         * The corresponding event id
-         * <P>Type: INTEGER (long)</P>
-         */
-        public static final String EVENT_ID = "event_id";
-
-        /**
-         * The RFC2445 compliant time the event starts
-         * <P>Type: TEXT</P>
-         */
-        public static final String DTSTART_2445 = "dtstart2445";
-
-        /**
-         * The RFC2445 compliant time the event ends
-         * <P>Type: TEXT</P>
-         */
-        public static final String DTEND_2445 = "dtend2445";
-
-        /**
-         * The RFC2445 compliant original instance time of the recurring event for which this
-         * event is an exception.
-         * <P>Type: TEXT</P>
-         */
-        public static final String ORIGINAL_INSTANCE_TIME_2445 = "originalInstanceTime2445";
-
-        /**
-         * The RFC2445 compliant last date this event repeats on, or NULL if it never ends
-         * <P>Type: TEXT</P>
-         */
-        public static final String LAST_DATE_2445 = "lastDate2445";
-    }
 
     protected void verifyAccounts() {
         AccountManager.get(getContext()).addOnAccountsUpdatedListener(this, null, false);
@@ -3850,10 +3813,11 @@ public class CalendarProvider2 extends SQLiteContentProvider implements OnAccoun
             for (String table : new String[]{"Calendars"}) {
                 // Find all the accounts the contacts DB knows about, mark the ones that aren't
                 // in the valid set for deletion.
-                Cursor c = mDb.rawQuery("SELECT DISTINCT " + CalendarDatabaseHelper.ACCOUNT_NAME
-                                        + ","
-                                        + CalendarDatabaseHelper.ACCOUNT_TYPE + " from "
-                        + table, null);
+                Cursor c = mDb.rawQuery("SELECT DISTINCT " +
+                                            Calendar.SyncColumns._SYNC_ACCOUNT +
+                                            "," +
+                                            Calendar.SyncColumns._SYNC_ACCOUNT_TYPE +
+                                        " FROM " + table, null);
                 while (c.moveToNext()) {
                     if (c.getString(0) != null && c.getString(1) != null) {
                         Account currAccount = new Account(c.getString(0), c.getString(1));
@@ -3870,10 +3834,10 @@ public class CalendarProvider2 extends SQLiteContentProvider implements OnAccoun
                     Log.d(TAG, "removing data for removed account " + account);
                 }
                 String[] params = new String[]{account.name, account.type};
-                mDb.execSQL("DELETE FROM Calendars"
-                        + " WHERE " + CalendarDatabaseHelper.ACCOUNT_NAME + "= ? AND "
-                        + CalendarDatabaseHelper.ACCOUNT_TYPE
-                        + "= ?", params);
+                mDb.execSQL("DELETE FROM Calendars" +
+                            " WHERE " +
+                                Calendar.SyncColumns._SYNC_ACCOUNT + "= ? AND " +
+                                Calendar.SyncColumns._SYNC_ACCOUNT_TYPE + "= ?", params);
             }
             mDbHelper.getSyncState().onAccountsChanged(mDb, accounts);
             mDb.setTransactionSuccessful();
