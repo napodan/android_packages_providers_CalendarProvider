@@ -55,7 +55,7 @@ import java.util.TimeZone;
 
     // Note: if you update the version number, you must also update the code
     // in upgradeDatabase() to modify the database (gracefully, if possible).
-    static final int DATABASE_VERSION = 103;
+    static final int DATABASE_VERSION = 104;
 
     private static final int PRE_FROYO_SYNC_STATE_VERSION = 3;
 
@@ -692,6 +692,10 @@ import java.util.TimeZone;
                 upgradeToVersion103(db);
                 oldVersion += 1;
             }
+            if (oldVersion == 103) {
+                upgradeToVersion104(db);
+                oldVersion += 1;
+            }
             removeOrphans(db);
         } catch (SQLiteException e) {
             Log.e(TAG, "onUpgrade: SQLiteException, recreating db. " + e);
@@ -723,6 +727,37 @@ import java.util.TimeZone;
             return true;
         }
         return false;
+    }
+
+    @VisibleForTesting
+    void upgradeToVersion104(SQLiteDatabase db) {
+        // Recreate the Events Views as we are deprecating Calendars "url" column
+        createEventsView(db);
+    }
+
+    @VisibleForTesting
+    void upgradeToVersion103(SQLiteDatabase db) {
+        // Add deleted column
+        db.execSQL("ALTER TABLE " + Tables.CALENDARS +" ADD COLUMN " +
+                Calendar.Calendars.DELETED + " INTEGER NOT NULL DEFAULT 0;");
+
+        // Add selfUrl, editUrl and eventsUrl
+        // Population of the new columns will be done by the SyncAdapter itself
+        db.execSQL("ALTER TABLE " + Tables.CALENDARS + " ADD COLUMN " +
+                Calendar.Calendars.SELF_URL + " TEXT");
+        db.execSQL("ALTER TABLE " + Tables.CALENDARS + " ADD COLUMN " +
+                Calendar.Calendars.EDIT_URL + " TEXT");
+        db.execSQL("ALTER TABLE " + Tables.CALENDARS + " ADD COLUMN " +
+                Calendar.Calendars.EVENTS_URL + " TEXT");
+
+        // Create index on Url column
+        db.execSQL("CREATE INDEX calendarsUrlIndex ON " + Tables.CALENDARS + " (" +
+                Calendar.Calendars.URL +
+                ");");
+
+        // Recreate the Events Views as column "deleted" is now ambiguous
+        // ("deleted" is now defined in both Calendars and Events tables)
+        createEventsView(db);
     }
 
     @VisibleForTesting
@@ -888,31 +923,6 @@ import java.util.TimeZone;
             db.execSQL("DELETE FROM CalendarCache;");
         }
         initCalendarCacheTable(db, oldTimezoneDbVersion);
-    }
-
-    @VisibleForTesting
-    void upgradeToVersion103(SQLiteDatabase db) {
-        // Add deleted column
-        db.execSQL("ALTER TABLE " + Tables.CALENDARS +" ADD COLUMN " +
-                Calendar.Calendars.DELETED + " INTEGER NOT NULL DEFAULT 0;");
-
-        // Add selfUrl, editUrl and eventsUrl
-        // Population of the new columns will be done by the SyncAdapter itself
-        db.execSQL("ALTER TABLE " + Tables.CALENDARS + " ADD COLUMN " +
-                Calendar.Calendars.SELF_URL + " TEXT");
-        db.execSQL("ALTER TABLE " + Tables.CALENDARS + " ADD COLUMN " +
-                Calendar.Calendars.EDIT_URL + " TEXT");
-        db.execSQL("ALTER TABLE " + Tables.CALENDARS + " ADD COLUMN " +
-                Calendar.Calendars.EVENTS_URL + " TEXT");
-
-        // Create index on Url column
-        db.execSQL("CREATE INDEX calendarsUrlIndex ON " + Tables.CALENDARS + " (" +
-                Calendar.Calendars.URL +
-                ");");
-
-        // Recreate the Events Views as column "deleted" is now ambiguous
-        // ("deleted" is now defined in both Calendars and Events tables)
-        createEventsView(db);
     }
 
     @VisibleForTesting
@@ -1600,7 +1610,7 @@ import java.util.TimeZone;
                 + " AS " + Calendar.Events._SYNC_DATA + ","
                 + Tables.EVENTS + "." + Calendar.Events._SYNC_MARK
                 + " AS " + Calendar.Events._SYNC_MARK + ","
-                + Calendar.Calendars.URL + ","
+                + Calendar.Calendars.EVENTS_URL + ","
                 + Calendar.Calendars.OWNER_ACCOUNT + ","
                 + Calendar.Calendars.SYNC_EVENTS
                 + " FROM " + Tables.EVENTS + " JOIN " + Tables.CALENDARS
