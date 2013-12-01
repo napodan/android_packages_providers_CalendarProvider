@@ -365,9 +365,17 @@ public class CalendarProvider2 extends SQLiteContentProvider implements OnAccoun
     @Override
     public boolean onCreate() {
         super.onCreate();
-        mDbHelper = (CalendarDatabaseHelper)getDatabaseHelper();
+        try {
+            return initialize();
+        } catch (RuntimeException e) {
+            Log.e(TAG, "Cannot start provider", e);
+            return false;
+        }
+    }
 
-        verifyAccounts();
+    private boolean initialize() {
+        mDbHelper = (CalendarDatabaseHelper)getDatabaseHelper();
+        mDb = mDbHelper.getWritableDatabase();
 
         // Register for Intent broadcasts
         IntentFilter filter = new IntentFilter();
@@ -386,9 +394,32 @@ public class CalendarProvider2 extends SQLiteContentProvider implements OnAccoun
         mMetaData = new MetaData(mDbHelper);
         mCalendarCache = new CalendarCache(mDbHelper);
 
-        updateTimezoneDependentFields();
+        postInitialize();
 
         return true;
+    }
+
+    protected void postInitialize() {
+        Thread thread = new PostInitializeThread();
+        thread.start();
+    }
+
+    private class PostInitializeThread extends Thread {
+        @Override
+        public void run() {
+            Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND);
+
+            verifyAccounts();
+
+            try {
+                doUpdateTimezoneDependentFields();
+            } catch (IllegalStateException e) {
+                // Added this because tests would fail if the provider is
+                // closed by the time this is executed
+
+                // Nothing actionable here anyways.
+            }
+        }
     }
 
     /**
@@ -405,23 +436,7 @@ public class CalendarProvider2 extends SQLiteContentProvider implements OnAccoun
         @Override
         public void run() {
             Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND);
-            try {
-                doUpdateTimezoneDependentFields();
-                triggerAppWidgetUpdate(-1 /*changedEventId*/ );
-            } catch (SQLException e) {
-                if (Log.isLoggable(TAG, Log.ERROR)) {
-                    Log.e(TAG, "doUpdateTimezoneDependentFields() failed", e);
-                }
-                try {
-                    // Clear at least the in-memory data (and if possible the
-                    // database fields) to force a re-computation of Instances.
-                    mMetaData.clearInstanceRange();
-                } catch (SQLException e2) {
-                    if (Log.isLoggable(TAG, Log.ERROR)) {
-                        Log.e(TAG, "clearInstanceRange() also failed: " + e2);
-                    }
-                }
-            }
+            doUpdateTimezoneDependentFields();
         }
     }
 
@@ -434,37 +449,41 @@ public class CalendarProvider2 extends SQLiteContentProvider implements OnAccoun
     }
 
     /**
-     * This method runs in a background thread.  If the timezone db or timezone has changed
+     * This method runs in a background thread.  If the timezone has changed
      * then the Instances table will be regenerated.
      */
     protected void doUpdateTimezoneDependentFields() {
-        String timezoneType = mCalendarCache.readTimezoneType();
-        // Nothing to do if we have the "home" timezone type (timezone is sticky)
-        if (timezoneType.equals(CalendarCache.TIMEZONE_TYPE_HOME)) {
-            return;
-        }
-        // We are here in "auto" mode, the timezone is coming from the device
-        if (! isSameTimezoneDatabaseVersion()) {
-            String localTimezone = TimeZone.getDefault().getID();
-            doProcessEventRawTimes(localTimezone, TimeUtils.getTimeZoneDatabaseVersion());
-        }
-        if (isLocalSameAsInstancesTimezone()) {
-            // Even if the timezone hasn't changed, check for missed alarms.
-            // This code executes when the CalendarProvider2 is created and
-            // helps to catch missed alarms when the Calendar process is
-            // killed (because of low-memory conditions) and then restarted.
-            rescheduleMissedAlarms();
+        try {
+            String timezoneType = mCalendarCache.readTimezoneType();
+            // Nothing to do if we have the "home" timezone type (timezone is sticky)
+            if (timezoneType != null && timezoneType.equals(CalendarCache.TIMEZONE_TYPE_HOME)) {
+                return;
+            }
+            // We are here in "auto" mode, the timezone is coming from the device
+            if (! isSameTimezoneDatabaseVersion()) {
+                String localTimezone = TimeZone.getDefault().getID();
+                doProcessEventRawTimes(localTimezone, TimeUtils.getTimeZoneDatabaseVersion());
+            }
+            if (isLocalSameAsInstancesTimezone()) {
+                // Even if the timezone hasn't changed, check for missed alarms.
+                // This code executes when the CalendarProvider2 is created and
+                // helps to catch missed alarms when the Calendar process is
+                // killed (because of low-memory conditions) and then restarted.
+                rescheduleMissedAlarms();
+            }
+        } catch (SQLException e) {
+            Log.e(TAG, "doUpdateTimezoneDependentFields() failed", e);
+            try {
+                // Clear at least the in-memory data (and if possible the
+                // database fields) to force a re-computation of Instances.
+                mMetaData.clearInstanceRange();
+            } catch (SQLException e2) {
+                Log.e(TAG, "clearInstanceRange() also failed: " + e2);
+            }
         }
     }
 
     protected void doProcessEventRawTimes(String localTimezone, String timeZoneDatabaseVersion) {
-        mDb = mDbHelper.getWritableDatabase();
-        if (mDb == null) {
-            if (Log.isLoggable(TAG, Log.VERBOSE)) {
-                Log.v(TAG, "Cannot update Events table from EventsRawTimes table");
-            }
-            return;
-        }
         mDb.beginTransaction();
         try {
             updateEventsStartEndFromEventRawTimesLocked();
@@ -506,7 +525,7 @@ public class CalendarProvider2 extends SQLiteContentProvider implements OnAccoun
     private long get2445ToMillis(String timezone, String dt2445) {
         if (null == dt2445) {
             if (Log.isLoggable(TAG, Log.VERBOSE)) {
-                Log.v( TAG, "Cannot parse null RFC2445 date");
+                Log.v(TAG, "Cannot parse null RFC2445 date");
             }
             return 0;
         }
@@ -515,7 +534,7 @@ public class CalendarProvider2 extends SQLiteContentProvider implements OnAccoun
             time.parse(dt2445);
         } catch (TimeFormatException e) {
             if (Log.isLoggable(TAG, Log.ERROR)) {
-                Log.e( TAG, "Cannot parse RFC2445 date " + dt2445);
+                Log.e(TAG, "Cannot parse RFC2445 date " + dt2445);
             }
             return 0;
         }
@@ -3798,8 +3817,12 @@ public class CalendarProvider2 extends SQLiteContentProvider implements OnAccoun
      * syncable.  TODO: update comment, make sure deletes don't get synced.
      */
     public void onAccountsUpdated(Account[] accounts) {
-        mDb = mDbHelper.getWritableDatabase();
-        if (mDb == null) return;
+        if (mDb == null) {
+            mDb = mDbHelper.getWritableDatabase();
+        }
+        if (mDb == null) {
+            return;
+        }
 
         HashMap<Account, Boolean> accountHasCalendar = new HashMap<Account, Boolean>();
         HashSet<Account> validAccounts = new HashSet<Account>();
@@ -3813,7 +3836,7 @@ public class CalendarProvider2 extends SQLiteContentProvider implements OnAccoun
         try {
 
             for (String table : new String[]{"Calendars"}) {
-                // Find all the accounts the contacts DB knows about, mark the ones that aren't
+                // Find all the accounts the calendar DB knows about, mark the ones that aren't
                 // in the valid set for deletion.
                 Cursor c = mDb.rawQuery("SELECT DISTINCT " +
                                             Calendar.SyncColumns._SYNC_ACCOUNT +
