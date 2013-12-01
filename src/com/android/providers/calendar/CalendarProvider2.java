@@ -40,6 +40,8 @@ import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteQueryBuilder;
 import android.net.Uri;
 import android.os.Debug;
+import android.os.Handler;
+import android.os.Message;
 import android.os.Process;
 import android.pim.EventRecurrence;
 import android.pim.RecurrenceSet;
@@ -326,7 +328,32 @@ public class CalendarProvider2 extends SQLiteContentProvider implements OnAccoun
 
     private AlarmManager mAlarmManager;
 
-    private CalendarAppWidgetProvider mAppWidgetProvider = CalendarAppWidgetProvider.getInstance();
+    /**
+     * Arbitrary integer that we assign to the messages that we send to this
+     * thread's handler, indicating that these are requests to send an update
+     * notification intent.
+     */
+    private static final int UPDATE_BROADCAST_MSG = 1;
+
+    /**
+     * Any requests to send a PROVIDER_CHANGED intent will be collapsed over
+     * this window, to prevent spamming too many intents at once.
+     */
+    private static final long UPDATE_BROADCAST_TIMEOUT_MILLIS =
+        (int) DateUtils.SECOND_IN_MILLIS;
+
+    private final Handler mBroadcastHandler = new Handler() {
+        @Override
+        public void handleMessage(Message msg) {
+            Context context = CalendarProvider2.this.getContext();
+            if (msg.what == UPDATE_BROADCAST_MSG) {
+                // Broadcast a provider changed intent
+                doSendUpdateNotification();
+                // Stop the service that was protecting us
+                context.stopService(new Intent(context, EmptyService.class));
+            }
+        }
+    };
 
     /**
      * Listens for timezone changes and disk-no-longer-full events
@@ -1809,7 +1836,7 @@ public class CalendarProvider2 extends SQLiteContentProvider implements OnAccoun
                             }
                         }
                     }
-                    triggerAppWidgetUpdate(id);
+                    sendUpdateNotification(id);
                 }
                 break;
             case CALENDARS:
@@ -1823,7 +1850,7 @@ public class CalendarProvider2 extends SQLiteContentProvider implements OnAccoun
                     mDbHelper.scheduleSync(account, false /* two-way sync */, calendarUrl);
                 }
                 id = mDbHelper.calendarsInsert(values);
-                triggerAppWidgetUpdate(id);
+                sendUpdateNotification(id);
                 break;
             case ATTENDEES:
                 if (!values.containsKey(Attendees.EVENT_ID)) {
@@ -2499,7 +2526,7 @@ public class CalendarProvider2 extends SQLiteContentProvider implements OnAccoun
                         result += deleteEventInternal(id, callerIsSyncAdapter, true /* isBatch */);
                     }
                     scheduleNextAlarm(false /* do not remove alarms */);
-                    triggerAppWidgetUpdate(-1 /* changedEventId */);
+                    sendUpdateNotification();
                 } finally {
                     cursor.close();
                     cursor = null;
@@ -2680,7 +2707,7 @@ public class CalendarProvider2 extends SQLiteContentProvider implements OnAccoun
 
         if (!isBatch) {
             scheduleNextAlarm(false /* do not remove alarms */);
-            triggerAppWidgetUpdate(-1 /* changedEventId */);
+            sendUpdateNotification();
         }
 
         return result;
@@ -2904,7 +2931,7 @@ public class CalendarProvider2 extends SQLiteContentProvider implements OnAccoun
 
                 if (result > 0) {
                     // update the widget
-                    triggerAppWidgetUpdate(-1 /* changedEventId */);
+                    sendUpdateNotification();
                 }
 
                 return result;
@@ -3000,12 +3027,12 @@ public class CalendarProvider2 extends SQLiteContentProvider implements OnAccoun
                             scheduleNextAlarm(false /* do not remove alarms */);
                         }
 
-                        triggerAppWidgetUpdate(id);
+                        sendUpdateNotification(id);
                     }
                 } else {
                     result = deleteEventInternal(id, callerIsSyncAdapter, true /* isBatch */);
                     scheduleNextAlarm(false /* do not remove alarms */);
-                    triggerAppWidgetUpdate(id);
+                    sendUpdateNotification(id);
                 }
 
                 return result;
@@ -3258,19 +3285,6 @@ public class CalendarProvider2 extends SQLiteContentProvider implements OnAccoun
 //        scheduleNextAlarm(false /* do not remove alarms */);
 //        triggerAppWidgetUpdate(-1);
 //    }
-
-    /**
-     * Update any existing widgets with the changed events.
-     *
-     * @param changedEventId Specific event known to be changed, otherwise -1.
-     *            If present, we use it to decide if an update is necessary.
-     */
-    private synchronized void triggerAppWidgetUpdate(long changedEventId) {
-        Context context = getContext();
-        if (context != null) {
-            mAppWidgetProvider.providerUpdated(context, changedEventId);
-        }
-    }
 
     /* Retrieve and cache the alarm manager */
     private AlarmManager getAlarmManager() {
@@ -3594,6 +3608,58 @@ public class CalendarProvider2 extends SQLiteContentProvider implements OnAccoun
                 CalendarAlerts.STATE + "=" + CalendarAlerts.SCHEDULED, null /* whereArgs */);
     }
 
+    /**
+     * Call this to trigger a broadcast of the ACTION_PROVIDER_CHANGED intent.
+     * This also provides a timeout, so any calls to this method will be batched
+     * over a period of BROADCAST_TIMEOUT_MILLIS defined in this class.
+     */
+    private void sendUpdateNotification() {
+        sendUpdateNotification(-1);
+    }
+
+    /**
+     * Call this to trigger a broadcast of the ACTION_PROVIDER_CHANGED intent.
+     * This also provides a timeout, so any calls to this method will be batched
+     * over a period of BROADCAST_TIMEOUT_MILLIS defined in this class.  The
+     * actual sending of the intent is done in
+     * {@link #doSendUpdateNotification()}.
+     *
+     * TODO add support for eventId
+     *
+     * @param the ID of the event that changed, or -1 for no specific event
+     */
+    private void sendUpdateNotification(long eventId) {
+        // Are there any pending broadcast requests?
+        if (mBroadcastHandler.hasMessages(UPDATE_BROADCAST_MSG)) {
+            // Delete any pending requests, before requeuing a fresh one
+            mBroadcastHandler.removeMessages(UPDATE_BROADCAST_MSG);
+        } else {
+            // No pending requests, start an empty service to prevent the
+            // process from getting killed off.  This will be stopped when the
+            // messaged is handled.
+            final Context context = getContext();
+            context.startService(new Intent(context, EmptyService.class));
+        }
+        Message msg = mBroadcastHandler.obtainMessage(UPDATE_BROADCAST_MSG);
+        mBroadcastHandler.sendMessageDelayed(msg, UPDATE_BROADCAST_TIMEOUT_MILLIS);
+    }
+
+    /**
+     * This method should not ever be called directly, to prevent sending too
+     * many potentially expensive broadcasts.  Instead, call
+     * {@link #sendUpdateNotification()} instead.
+     *
+     * @see #sendUpdateNotification()
+     */
+    private void doSendUpdateNotification() {
+        Intent intent = new Intent(Intent.ACTION_PROVIDER_CHANGED,
+                Uri.parse("content://" + Calendar.AUTHORITY + "/"));
+        Log.i(TAG, "Sending notification intent: " + intent);
+        // TODO attach extra information to the intent
+        // intent.putExtra(name, value)
+        getContext().sendBroadcast(intent, null);
+    }
+
     private static String sEventsTable = "Events";
     private static String sAttendeesTable = "Attendees";
     private static String sRemindersTable = "Reminders";
@@ -3871,7 +3937,7 @@ public class CalendarProvider2 extends SQLiteContentProvider implements OnAccoun
         }
 
         // make sure the widget reflects the account changes
-        triggerAppWidgetUpdate(-1 /* changedEventId */);
+        sendUpdateNotification();
     }
 
     /* package */ static boolean readBooleanQueryParameter(Uri uri, String name,
